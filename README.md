@@ -225,7 +225,7 @@ Th.S Hồ Lê Viết Nin
 **Thành viên thực hiện:**
 
 * Nguyễn Thảo Nguyên – 27202202175
-* Đoàn Thị Thảo Ly – 28201101597
+* Doãn Thị Thảo Ly – 28201101597
 * Nguyễn Thảo Như Bình – 28201202650
 * Nguyễn Quang Khải – 28211104617
 * Nguyễn Đình Nhật Tân – 28218305424
