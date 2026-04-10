@@ -228,7 +228,7 @@ Th.S Hồ Lê Viết Nin
 * Đoàn Thị Thảo Ly – 28201101597
 * Nguyễn Thảo Như Bình – 28201202650
 * Nguyễn Quang Khải – 28211104617
-* Nguyễn Đinh Nhật Tân – 28218305424
+* Nguyễn Đình Nhật Tân – 28218305424
 
 ---
 
