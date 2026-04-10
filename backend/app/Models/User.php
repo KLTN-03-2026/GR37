@@ -2,46 +2,47 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable;
+    use HasApiTokens, Notifiable, HasFactory; // ✅ thêm HasFactory
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var array<int, string>
-     */
+    protected $table = 'nguoi_dung';
+
     protected $fillable = [
-        'name',
+        'ho_ten',
+        'ten_tai_khoan',
         'email',
-        'password',
+        'mat_khau',
+        'anh_dai_dien',
+        'trang_thai'
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var array<int, string>
-     */
     protected $hidden = [
-        'password',
-        'remember_token',
+        'mat_khau'
     ];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
-    protected function casts(): array
+    public function getAuthPassword()
     {
-        return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
-        ];
+        return $this->mat_khau;
+    }
+
+    public function roles()
+    {
+        return $this->belongsToMany(
+            VaiTro::class,
+            'nguoi_dung_vai_tro',
+            'nguoi_dung_id',
+            'vai_tro_id'
+        );
+    }
+
+    public function toChuc()
+    {
+        return $this->hasOne(ToChuc::class, 'nguoi_dung_id');
     }
 }
