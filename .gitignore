@@ -5,7 +5,6 @@ backend/public/hot
 backend/storage/*.key
 backend/.env
 backend/.phpunit.result.cache
-
 ai/venv/
 ai/.env
 ai/__pycache__/
@@ -14,3 +13,4 @@ ai/*.pyc
 .vscode/
 .idea/
 .DS_Store
+**/.history/
