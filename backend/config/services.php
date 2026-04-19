@@ -24,6 +24,10 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'resend' => [
+        'key' => env('RESEND_KEY'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
@@ -31,4 +35,16 @@ return [
         ],
     ],
 
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URI'),
+    ],
+
+    'vnpay' => [
+        'tmn_code'    => env('VNP_TMNCODE'),
+        'hash_secret' => env('VNP_HASH_SECRET'),
+        'url'         => env('VNP_URL'),
+        'return_url'  => env('VNP_RETURN_URL'),
+    ],
 ];
