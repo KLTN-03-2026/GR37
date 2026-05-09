@@ -14,7 +14,11 @@ class GiaoDichQuy extends Model
         'ung_ho_id',
         'so_tien',
         'loai_giao_dich',
-        'mo_ta'
+        'mo_ta',
+        'trang_thai',
+        'ma_giao_dich_ngan_hang',
+        'ghi_chu_admin',
+        'ngay_giao_dich',
     ];
 
     public function ungHo()
@@ -25,10 +29,5 @@ class GiaoDichQuy extends Model
     public function chienDich()
     {
         return $this->belongsTo(ChienDichGayQuy::class, 'chien_dich_gay_quy_id');
-    }
-
-    public function chiTieu()
-    {
-        return $this->hasOne(ChiTieuChienDich::class, 'giao_dich_quy_id');
     }
 }

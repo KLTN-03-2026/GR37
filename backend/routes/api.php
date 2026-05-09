@@ -18,6 +18,7 @@ use App\Http\Controllers\TroChuyenController;
 use App\Http\Controllers\PostCommentController;
 use App\Http\Controllers\PostReportController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\WithdrawRequestController;
 
 Route::post('/register', [AuthController::class,'register']);
 Route::post('/send-otp', [AuthController::class, 'sendOtp']);
@@ -33,9 +34,11 @@ Route::get('/map/campaigns', [CampaignController::class, 'map']);
 Route::get('/posts', [PostController::class, 'index']);
 Route::get('/posts/{id}', [PostController::class, 'show'])->whereNumber('id');
 Route::get('/posts/{id}/comments', [PostCommentController::class, 'index'])->whereNumber('id');
+Route::get('/dashboard/community-stats', [DashboardController::class, 'communityStats']);
 
 // ds danh mục
-Route::get('/categories', [CampaignController::class, 'getDanhMuc']);;
+Route::get('/categories', [CampaignController::class, 'getDanhMuc']);
+Route::get('/posts/search', [PostController::class, 'search']);
 
 Route::middleware('auth:sanctum')->group(function(){
     Route::get('/me', [AuthController::class, 'me']);
@@ -57,6 +60,7 @@ Route::middleware('auth:sanctum')->group(function(){
             Route::get('/users', [AdminUserController::class, 'index']);
             Route::post('/users/{id}/lock', [AdminUserController::class, 'lock']);
             Route::post('/users/{id}/unlock', [AdminUserController::class, 'unlock']);
+            Route::get('/users/organizations/pending/{id}', [AdminUserController::class, 'showLicense']);
 
             // ADMIN - dashboard
             Route::get('/dashboard/summary', [AdminDashboardController::class, 'summary']);
@@ -69,9 +73,11 @@ Route::middleware('auth:sanctum')->group(function(){
             Route::get('/organizations/{id}', [OrganizationController::class, 'show']);
             Route::get('/campaigns', [CampaignController::class, 'index']);
             Route::get('/campaigns/{id}', [CampaignController::class, 'show']);
+            Route::get('/campaigns/{id}/violations', [PostReportController::class, 'campaignViolations'])->whereNumber('id');
+
             Route::get('/posts', [PostController::class, 'index']);
             Route::get('/posts/{id}', [PostController::class, 'show']);
-
+            Route::get('/posts/{id}/violations', [PostReportController::class, 'postViolations'])->whereNumber('id');
             // ADMIN - duyet to chuc
             Route::post('/organization/{id}/approve', [OrganizationController::class, 'approve']);
             Route::post('/organization/{id}/reject', [OrganizationController::class, 'reject']);
@@ -82,6 +88,7 @@ Route::middleware('auth:sanctum')->group(function(){
             // ADMIN - duyet chien dich
             Route::post('/campaigns/{id}/approve', [CampaignController::class, 'approveCampaign']);
             Route::post('/campaigns/{id}/reject', [CampaignController::class, 'rejectCampaign']);
+            Route::post('/campaigns/{id}/suspend', [CampaignController::class, 'suspendCampaign']);
 
             // ADMIN - fraud
             Route::post('/fraud-check/auto', [FraudController::class, 'autoCheck']);
@@ -89,32 +96,18 @@ Route::middleware('auth:sanctum')->group(function(){
             Route::get('/fraud-alerts', [FraudController::class, 'getAlerts']);
             Route::post('/fraud-alerts/{canhBao}', [FraudController::class, 'updateAlert']);
 
-            Route::get('/post-reports', [PostReportController::class, 'adminIndex']);
+             Route::get('/violation-reasons', [PostReportController::class, 'violationReasons']);
             Route::post('/post-reports/{id}', [PostReportController::class, 'adminUpdate'])->whereNumber('id');
+            Route::get('/post-reports', [PostReportController::class, 'adminIndex']);
+            Route::post('/posts/{id}/suspend', [PostController::class, 'suspendByAdmin'])->whereNumber('id');
+
+            // ADMIN - duyet rut tien
+            Route::get('/withdraw-requests', [WithdrawRequestController::class, 'adminIndex']);
+            Route::put('/withdraw-requests/{id}/confirm', [WithdrawRequestController::class, 'confirm']);
+            Route::put('/withdraw-requests/{id}/reject', [WithdrawRequestController::class, 'reject']);
         });
 
        
-    });
-
-    Route::middleware('role:NGUOI_DUNG')->group(function(){
-        //ttcn
-        Route::get('/user/profile',[UserProfileController::class,'getProfile']);
-        Route::post('/user/profile',[UserProfileController::class,'updateProfile']);
-        Route::post('/user/change-password',[UserProfileController::class,'changePassword']);
-        Route::post('/user/update-diachi',[UserProfileController::class,'updateDiaChi']);
-
-        //xem profile người dùng khác
-        Route::get('/profile/{id}', [UserProfileController::class, 'show']);
-
-        //đăng ký tổ chức
-        Route::post('/organization/register', [OrganizationController::class, 'register']);
-        Route::get('/organization/status', [OrganizationController::class, 'status']);
-
-        //ủng hộ
-        Route::post('/donate', [DonateController::class, 'donate']);
-        Route::get('/donate/history', [DonateController::class, 'donateHistory']);
-        Route::get('/donate/{id}', [DonateController::class, 'getDonateDetail']);
-        Route::post('/momo/success', [DonateController::class, 'momoSuccess']);
     });
     
     Route::middleware(['role:TO_CHUC','update.campaign'])->group(function(){
@@ -129,11 +122,19 @@ Route::middleware('auth:sanctum')->group(function(){
         Route::get('/dashboard/financial-summary', [DashboardController::class, 'financialSummary']);
         Route::get('/dashboard/monthly-statistics', [DashboardController::class, 'monthlyStatistics']);
         Route::get('/dashboard/active-campaigns', [DashboardController::class, 'activeCampaigns']);
+        Route::get('/campaigns/others', [DashboardController::class, 'otherCampaigns']);
         Route::get('/dashboard/recent-activities', [DashboardController::class, 'recentActivities']);
 
         //hoạt động
+        Route::get('/campaigns/{id}/withdraw-expenses', [CampaignController::class, 'getWithdrawWithExpenses']);
         Route::post('/campaigns/{id}/expenses', [CampaignController::class, 'storeExpense']);
         Route::get('/campaigns/{id}/withdraw-transactions', [CampaignController::class, 'getWithdrawTransactions']);
+        
+        //yêu cầu rút tiền
+        Route::get('/withdraw-requests', [WithdrawRequestController::class, 'index']);
+        Route::post('/withdraw-requests', [WithdrawRequestController::class, 'store']);
+        Route::get('/withdraw-requests/campaigns', [WithdrawRequestController::class, 'campaigns']);
+      
    });
 
     // Feed - user và tổ chức: đăng/cập nhật/xóa 
@@ -141,9 +142,11 @@ Route::middleware('auth:sanctum')->group(function(){
         // CRUD posts
         Route::post('/posts', [PostController::class, 'store']);
         Route::get('/posts/me', [PostController::class, 'me']);
+        Route::get('/posts/{id}/related', [PostController::class, 'related']);
         Route::post('/posts/{id}', [PostController::class, 'update'])->whereNumber('id');
         Route::delete('/posts/{id}', [PostController::class, 'destroy'])->whereNumber('id');
-
+        
+        
         // AI matching
         Route::get('/posts/{id}/matches', [PostController::class, 'matches'])->whereNumber('id');
        
@@ -159,9 +162,23 @@ Route::middleware('auth:sanctum')->group(function(){
             Route::post('/{id}/da-xem', [TroChuyenController::class, 'danhDauDaXem']);
         });
        
-       
+        //ttcn
+        Route::get('/user/profile',[UserProfileController::class,'getProfile']);
+        Route::post('/user/profile',[UserProfileController::class,'updateProfile']);
+        Route::post('/user/change-password',[UserProfileController::class,'changePassword']);
+        Route::post('/user/update-diachi',[UserProfileController::class,'updateDiaChi']);
+
+        //đăng ký tổ chức
+        Route::post('/organization/register', [OrganizationController::class, 'register']);
+        Route::get('/organization/status', [OrganizationController::class, 'status']);
+
+        //ủng hộ
+        Route::post('/donate', [DonateController::class, 'donate']);
+        Route::get('/donate/history', [DonateController::class, 'donateHistory']);
+        Route::get('/donate/{id}', [DonateController::class, 'getDonateDetail']);
     });
 });
+Route::post('/upload-image', [PostController::class, 'uploadImage']);
 
 //xem tổ chức
 Route::get('/organization', [OrganizationController::class, 'index']);
@@ -176,3 +193,7 @@ Route::middleware('update.campaign')->group(function () {
 });
 
 Route::post('/momo/ipn', [DonateController::class, 'momoIpn']);
+Route::get('/momo/return', [DonateController::class, 'momoReturn']);
+
+//xem profile người dùng khác
+Route::get('/profile/{id}', [UserProfileController::class, 'show']);
