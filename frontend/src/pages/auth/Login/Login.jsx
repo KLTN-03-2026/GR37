@@ -1,18 +1,61 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import axios from "axios";
 import { Form, Input, Button, Checkbox, notification } from "antd";
 import { MailOutlined, LockOutlined } from "@ant-design/icons";
 import { FcGoogle } from "react-icons/fc";
 import { loginAPI, loginGoogleAPI } from "../../../api/authService";
 import useAuthStore from "../../../store/authStore";
 import logo from "../../../assets/logo.png";
+import { API_URL } from "../../../api/config";
 import "./Login.scss";
 
 export default function Login() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const { setAuth } = useAuthStore();
+
+  const hasVerified = useRef(false);
+
+  useEffect(() => {
+    const token = params.get("verify_token");
+
+    if (!token || hasVerified.current) return;
+
+    hasVerified.current = true;
+
+    const verify = async () => {
+      try {
+        await axios.get(`${API_URL}/verify-register?token=${token}`);
+
+        sessionStorage.setItem("verify_success", "true");
+
+        window.location.replace("/dang-nhap");
+      } catch (err) {
+        notification.error({
+          title: "Xác minh thất bại!",
+          description: err.response?.data?.message || "Token không hợp lệ",
+        });
+      }
+    };
+
+    verify();
+  }, [params]);
+
+  useEffect(() => {
+    const isVerified = sessionStorage.getItem("verify_success");
+
+    if (isVerified) {
+      notification.success({
+        title: "Xác minh thành công!",
+        description: "Bạn có thể đăng nhập ngay bây giờ",
+      });
+
+      sessionStorage.removeItem("verify_success");
+    }
+  }, []);
 
   const handleSubmit = async (values) => {
     try {
@@ -23,16 +66,32 @@ export default function Login() {
         password: values.password,
       });
 
-      notification.success({
-        message: "Đăng nhập thành công!",
-      });
+      const remember = values.remember;
+
+      if (remember) {
+        localStorage.setItem("token", res.data.token);
+        localStorage.setItem("user", JSON.stringify(res.data.user));
+        localStorage.setItem("roles", JSON.stringify(res.data.roles));
+      } else {
+        sessionStorage.setItem("token", res.data.token);
+        sessionStorage.setItem("user", JSON.stringify(res.data.user));
+        sessionStorage.setItem("roles", JSON.stringify(res.data.roles));
+      }
+
       setAuth(res.data);
 
-      navigate("/bang-tin");
+      const roles = res.data.roles || [];
+      const isAdmin = roles.some(
+        (r) =>
+          r === "ADMIN" || r?.ten === "ADMIN" || r?.ten_vai_tro === "ADMIN",
+      );
+      notification.success({ message: "Đăng nhập thành công!" });
+      navigate(isAdmin ? "/admin" : "/bang-tin");
     } catch (err) {
       notification.error({
         message: "Đăng nhập thất bại!",
-        description: err.response?.data?.message || "Sai tài khoản hoặc mật khẩu!",
+        description:
+          err.response?.data?.message || "Sai tài khoản hoặc mật khẩu!",
       });
     } finally {
       setLoading(false);
@@ -119,7 +178,12 @@ export default function Login() {
               <div className="divider-text">hoặc</div>
 
               <Form.Item style={{ marginBottom: 8 }}>
-                <Button block size="large" className="google-btn" onClick={loginGoogleAPI}>
+                <Button
+                  block
+                  size="large"
+                  className="google-btn"
+                  onClick={loginGoogleAPI}
+                >
                   <FcGoogle />
                   Đăng nhập bằng tài khoản Google
                 </Button>

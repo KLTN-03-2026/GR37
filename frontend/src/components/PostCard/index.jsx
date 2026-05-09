@@ -21,6 +21,8 @@ import {
   FaCheckCircle,
   FaRegComment,
 } from "react-icons/fa";
+import { BsBox2HeartFill } from "react-icons/bs";
+import { FaRegHandshake } from "react-icons/fa";
 import { SiMessenger } from "react-icons/si";
 import { notification } from "antd";
 import { useNavigate } from "react-router-dom";
@@ -30,6 +32,7 @@ import ReportSheet from "../../components/ReportSheet/index";
 import usePostStore from "../../store/postStore";
 import useAuthStore from "../../store/authStore";
 import useChatStore from "../../store/chatStore";
+import useRelated from "../../hooks/useRelated";
 import { formatPostTime } from "../../utils/formatTime";
 import "./styles.scss";
 
@@ -41,19 +44,36 @@ export default function PostCard({ post, style, onDelete }) {
   const [reportLoading, setReportLoading] = useState(false);
   const [activePostId, setActivePostId] = useState(null);
   const { fetchPostDetail, postDetail } = usePostStore();
+  const { fetchMatches, matches, matchesStatus } = usePostStore();
+  const matchKey = String(post.id);
+  const matchStatus = matchesStatus?.[matchKey];
+  const postMatches = matches[String(post.id)] || [];
+  const [aiPhase, setAiPhase] = useState("idle");
   const menuRef = useRef(null);
   const { user } = useAuthStore();
-
+  const isMyPost = user?.id === post.user?.id;
+  const aiSuggestions = postMatches.map((item) => ({
+    id: item.post?.id,
+    title: item.post?.tieu_de,
+    location: item.post?.dia_diem,
+    matchScore: Math.round(item.match_percent ?? 0),
+  }));
+  const hasAiSuggestions = isMyPost && aiSuggestions.length > 0;
+  const { related } = useRelated(post.id);
+  const hasRelated = !isMyPost && related.length > 0;
+  const [relatedPhase, setRelatedPhase] = useState("idle");
   const { toggleLike, reportPost } = usePostStore();
   const openChatWith = useChatStore((s) => s.openChatWith);
 
   const postState = usePostStore((s) => s.posts.find((p) => p.id === post?.id));
-  const liked = postState?.liked;
-  const likeCount = postState?.so_luot_thich ?? 0;
-  const cmtCount = postState?.so_binh_luan ?? 0;
+  const liked = postState?.liked ?? post.liked ?? false;
+  const likeCount = postState?.so_luot_thich ?? post.likeCount ?? 0;
+  const cmtCount = postState?.so_binh_luan ?? post.commentCount ?? 0;
 
   const { updatePost, deletePost: deletePostStore } = usePostStore();
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [aiExpanded, setAiExpanded] = useState(false);
+  const [relatedExpanded, setRelatedExpanded] = useState(false);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
@@ -81,8 +101,6 @@ export default function PostCard({ post, style, onDelete }) {
         { label: "Đã nhận đủ", value: "DA_NHAN", icon: <FaCheckCircle /> },
       ];
 
-  const hasAiSuggestions = post.aiSuggestions?.length > 0;
-  const isMyPost = user?.id === post.user?.id;
   const images = post.images || [];
   const imgCount = images.length;
 
@@ -111,6 +129,50 @@ export default function PostCard({ post, style, onDelete }) {
   const isStatusDone = (status) => status === "DA_TANG" || status === "DA_NHAN";
 
   useEffect(() => {
+    if (!post.id) return;
+    if (!isMyPost) return;
+    if (matchStatus === "empty") return;
+    fetchMatches(post.id);
+  }, [post.id, matchStatus]);
+
+  useEffect(() => {
+    if (!hasAiSuggestions) return;
+
+    const start = setTimeout(() => {
+      setAiPhase("loading");
+
+      const timer = setTimeout(() => {
+        setAiPhase("done");
+      }, 2500);
+
+      return () => clearTimeout(timer);
+    }, 0);
+
+    return () => clearTimeout(start);
+  }, [hasAiSuggestions]);
+
+  useEffect(() => {
+    if (isMyPost) return;
+    if (!hasRelated) return;
+
+    let loadingTimer;
+    let doneTimer;
+
+    loadingTimer = setTimeout(() => {
+      setRelatedPhase("loading");
+
+      doneTimer = setTimeout(() => {
+        setRelatedPhase("done");
+      }, 2500);
+    }, 0);
+
+    return () => {
+      clearTimeout(loadingTimer);
+      clearTimeout(doneTimer);
+    };
+  }, [hasRelated, isMyPost]);
+
+  useEffect(() => {
     if (activePostId && activePostId !== post.id) {
       fetchPostDetail(activePostId);
     }
@@ -130,6 +192,10 @@ export default function PostCard({ post, style, onDelete }) {
                 id: fetchedPost.nguoi_dung?.id,
                 name: fetchedPost.nguoi_dung?.ho_ten,
                 avatar: fetchedPost.nguoi_dung?.ho_ten?.charAt(0) || "?",
+                avatar_url:
+                  fetchedPost.nguoi_dung?.anh_dai_dien ||
+                  fetchedPost.nguoi_dung?.avatar_url ||
+                  null,
                 color: "#1890ff",
               },
               location: fetchedPost.dia_diem,
@@ -247,6 +313,34 @@ export default function PostCard({ post, style, onDelete }) {
     setEditOpen(true);
   };
 
+  const handleShare = async (e) => {
+    e.stopPropagation();
+    const url = `https://smartdonate-phi.vercel.app/bai-dang/${post.id}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: post.title,
+          text: `${post.title} — SmartDonate`,
+          url,
+        });
+        return;
+      } catch {}
+    }
+
+    try {
+      await navigator.clipboard.writeText(url);
+      notification.success({
+        message: "Đã sao chép liên kết",
+        description: "Bạn có thể dán vào Messenger, Zalo, Facebook...",
+        placement: "topRight",
+        duration: 2,
+      });
+    } catch {
+      notification.error({ message: "Không thể sao chép, thử lại nhé" });
+    }
+  };
+
   const handleSelectImages = (files) => {
     const arr = Array.from(files);
     setEditData((prev) => ({
@@ -321,6 +415,20 @@ export default function PostCard({ post, style, onDelete }) {
     ...editData.preview.map((url, i) => ({ url, isNew: true, idx: i })),
   ];
 
+  const fixAvatarUrl = (url) => {
+    if (!url) return null;
+
+    // nếu là http thì đổi thành https
+    if (url.startsWith("http://")) {
+      return url.replace("http://", "https://");
+    }
+
+    return url;
+  };
+
+  const avatarUrl = post.user?.avatar_url || post.user?.anh_dai_dien || null;
+  const finalAvatar = fixAvatarUrl(avatarUrl);
+
   return (
     <>
       <div
@@ -329,15 +437,36 @@ export default function PostCard({ post, style, onDelete }) {
       >
         {/* Header */}
         <div className="post-card__header">
-          <div
-            className="post-card__avatar"
-            style={{ background: post.user.color }}
-          >
-            {post.user.avatar}
+          <div className="post-card__avatar" style={{ background: "#1890ff" }}>
+            {finalAvatar ? (
+              <img
+                src={finalAvatar}
+                alt="avatar"
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  borderRadius: "50%",
+                }}
+              />
+            ) : (
+              <span style={{ color: "#fff", fontWeight: 700, fontSize: 16 }}>
+                {post.user.avatar}
+              </span>
+            )}
           </div>
-
           <div className="post-card__user-info">
-            <div className="post-card__username">{post.user.name}</div>
+            <div
+              className="post-card__username"
+              style={{ cursor: "pointer" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const uid = post.nguoi_dung_id ?? post.user?.id;
+                if (uid) navigate(`/bang-tin/nguoi-dung/${uid}`);
+              }}
+            >
+              {post.user.name}
+            </div>
             <div className="post-card__meta">
               <span className="post-card__location">
                 <FiMapPin size={11} /> {post.location}
@@ -348,14 +477,16 @@ export default function PostCard({ post, style, onDelete }) {
               </span>
             </div>
           </div>
-
-          {hasAiSuggestions && (
+          {hasAiSuggestions && aiPhase === "done" && (
             <div className="post-card__ai-header-badge">
-              <RiSparklingLine size={11} />
-              AI GỢI Ý
+              <RiSparklingLine size={11} /> AI hỗ trợ cho bạn
             </div>
           )}
-
+          {!hasAiSuggestions && hasRelated && (
+            <div className="post-card__ai-header-badge">
+              <RiSparklingLine size={11} /> AI gợi ý gần bạn
+            </div>
+          )}
           <div className="post-card__more-wrap" ref={menuRef}>
             <button className="post-card__more-btn" onClick={handleMenuToggle}>
               <FiMoreVertical size={20} />
@@ -413,9 +544,6 @@ export default function PostCard({ post, style, onDelete }) {
           >
             {post.desc}
           </div>
-          <button className="post-card__see-more" onClick={handleToggleDesc}>
-            {expanded ? "Thu gọn" : "Xem thêm"}
-          </button>
 
           {imgCount > 0 && (
             <div
@@ -509,19 +637,24 @@ export default function PostCard({ post, style, onDelete }) {
               </button>
             )}
 
-            <button
-              className="post-card__icon-btn share"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <button className="post-card__icon-btn share" onClick={handleShare}>
               <FiSend size={20} />
               <span>Chia sẻ</span>
             </button>
           </div>
         </div>
 
-        {/* AI Suggestions */}
-        {hasAiSuggestions && (
-          <div className="post-card__ai-box">
+        {/* AI loading spinner */}
+        {hasAiSuggestions && aiPhase === "loading" && (
+          <div className="post-card__ai-loading">
+            <span className="post-card__ai-spinner" />
+            <span className="post-card__ai-loading-text">
+              AI đang phân tích...
+            </span>
+          </div>
+        )}
+        {hasAiSuggestions && aiPhase === "done" && (
+          <div className="post-card__ai-box post-card__ai-box--animate">
             <div className="post-card__ai-box-header">
               <div className="post-card__ai-box-title">
                 <div className="post-card__ai-robot-icon">
@@ -531,35 +664,121 @@ export default function PostCard({ post, style, onDelete }) {
                 <span>Gợi ý phù hợp cho bạn</span>
                 <RiSparklingLine size={12} className="post-card__ai-sparkle" />
               </div>
-              <span className="post-card__ai-count">
-                {post.aiSuggestions.length} kết quả
-              </span>
+              <button
+                className={`post-card__ai-toggle${aiExpanded ? " post-card__ai-toggle--open" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAiExpanded((p) => !p);
+                }}
+              >
+                <span className="post-card__ai-toggle-count">
+                  {aiSuggestions.length}
+                </span>
+                <span className="post-card__ai-toggle-label">gợi ý</span>
+                <span className="post-card__ai-toggle-arrow">›</span>
+              </button>
             </div>
-            <div className="post-card__ai-list">
-              {post.aiSuggestions.map((sug) => (
-                <div key={sug.id} className="post-card__ai-item">
-                  <div className="post-card__ai-item-icon">{sug.icon}</div>
-                  <div className="post-card__ai-item-info">
-                    <div className="post-card__ai-item-title">{sug.title}</div>
-                    <div className="post-card__ai-item-loc">
-                      <FiMapPin size={10} /> {sug.location}
-                      <span className="post-card__ai-item-score">
-                        {sug.matchScore}% khớp
-                      </span>
+            {aiExpanded && (
+              <div className="post-card__ai-list post-card__ai-list--reveal">
+                {aiSuggestions.map((sug) => (
+                  <div key={sug.id} className="post-card__ai-item">
+                    <div className="post-card__ai-item-icon">
+                      <FaRegHandshake color="#096dd9" size={30} />
                     </div>
+                    <div className="post-card__ai-item-info">
+                      <div className="post-card__ai-item-title">
+                        {sug.title}
+                      </div>
+                      <div className="post-card__ai-item-loc">
+                        <FiMapPin size={10} /> {sug.location}
+                        <span className="post-card__ai-item-score">
+                          {sug.matchScore}% khớp
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      className="post-card__ai-view-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActivePostId(sug.id);
+                      }}
+                    >
+                      Xem ngay <FiChevronRight size={12} />
+                    </button>
                   </div>
-                  <button
-                    className="post-card__ai-view-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActivePostId(sug.id);
-                    }}
-                  >
-                    Xem ngay <FiChevronRight size={12} />
-                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* AI Related — bài gần bạn */}
+        {!isMyPost && relatedPhase === "loading" && (
+          <div className="post-card__ai-loading">
+            <span className="post-card__ai-spinner" />
+            <span className="post-card__ai-loading-text">
+              Đang tìm bài gần bạn...
+            </span>
+          </div>
+        )}
+        {!isMyPost && relatedPhase === "done" && hasRelated && (
+          <div className="post-card__ai-box post-card__ai-box--animate">
+            <div className="post-card__ai-box-header">
+              <div className="post-card__ai-box-title">
+                <div className="post-card__ai-robot-icon">
+                  <RiRobot2Line size={15} />
+                  <span className="post-card__ai-ping" />
                 </div>
-              ))}
+                <span>Gợi ý cùng nhu cầu trong khu vực</span>
+                <RiSparklingLine size={12} className="post-card__ai-sparkle" />
+              </div>
+              <button
+                className={`post-card__ai-toggle${relatedExpanded ? " post-card__ai-toggle--open" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRelatedExpanded((p) => !p);
+                }}
+              >
+                <span className="post-card__ai-toggle-count">
+                  {related.slice(0, 3).length}
+                </span>
+                <span className="post-card__ai-toggle-label">gần bạn</span>
+                <span className="post-card__ai-toggle-arrow">›</span>
+              </button>
             </div>
+            {relatedExpanded && (
+              <div className="post-card__ai-list post-card__ai-list--reveal">
+                {related.slice(0, 3).map((r) => (
+                  <div key={r.id} className="post-card__ai-item">
+                    <div className="post-card__ai-item-icon">
+                      <BsBox2HeartFill color="#096dd9" size={30} />
+                    </div>
+                    <div className="post-card__ai-item-info">
+                      <div className="post-card__ai-item-title">
+                        {r.tieu_de}
+                      </div>
+                      <div className="post-card__ai-item-loc">
+                        <FiMapPin size={10} /> {r.dia_diem || "Không rõ"}
+                        {r.distance_km != null && (
+                          <span className="post-card__ai-item-dist">
+                            · {r.distance_km.toFixed(1)} km
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      className="post-card__ai-view-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActivePostId(r.id);
+                      }}
+                    >
+                      Xem <FiChevronRight size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -602,9 +821,26 @@ export default function PostCard({ post, style, onDelete }) {
             <div className="edit-modal__author">
               <div
                 className="edit-modal__author-avatar"
-                style={{ background: post.user.color }}
+                style={{ background: post.user?.color || "#1890ff" }}
               >
-                {post.user.avatar}
+                {finalAvatar ? (
+                  <img
+                    src={finalAvatar}
+                    alt=""
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      borderRadius: "50%",
+                    }}
+                  />
+                ) : (
+                  <span
+                    style={{ color: "#fff", fontWeight: 600, fontSize: 16 }}
+                  >
+                    {post.user.avatar}
+                  </span>
+                )}
               </div>
               <div className="edit-modal__author-info">
                 <div className="edit-modal__author-name">{post.user.name}</div>
