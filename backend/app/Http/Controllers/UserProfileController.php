@@ -8,6 +8,7 @@ use App\Http\Requests\User\UpdateDiaChiRequest;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use App\Services\GeocodingService;
 use App\Models\ToChuc;
 use Illuminate\Support\Facades\DB;
 use App\Models\User;
@@ -26,23 +27,24 @@ class UserProfileController extends Controller
 
         $tongTienUngHo = DB::table('ung_ho')
             ->where('nguoi_dung_id', $user->id)
+            ->where('trang_thai', 'THANH_CONG')
             ->sum('so_tien');
         
         $user = $user->fresh()->load('toChuc');
 
         $user->anh_dai_dien = $user->anh_dai_dien
-            ? asset('storage/' . $user->anh_dai_dien)
+            ? $this->resolveMediaUrl($user->anh_dai_dien)
             : null;
 
         if ($user->toChuc) {
             $user->toChuc->logo = $user->toChuc->logo
-                ? asset('storage/' . $user->toChuc->logo)
+                ? $this->resolveMediaUrl($user->toChuc->logo)
                 : null;
         }
 
         $taiKhoan = optional($user->toChuc)->taiKhoanGayQuy;
         if ($taiKhoan && $taiKhoan->qr_code) {
-            $taiKhoan->qr_code = asset($taiKhoan->qr_code);
+            $taiKhoan->qr_code = $this->resolveMediaUrl($taiKhoan->qr_code);
         }
 
         return response()->json([
@@ -61,8 +63,20 @@ class UserProfileController extends Controller
             'ho_ten',
         ]);
 
-        if ($request->has('dia_chi_user')) {
-            $userData['dia_chi'] = $request->dia_chi_user;
+        if ($request->filled('dia_chi_user')) {
+
+            $diaChi = $request->dia_chi_user;
+        
+            $geo = app(GeocodingService::class);
+            $coords = $geo->geocode($diaChi);
+        
+            $userData['dia_chi'] = $diaChi;
+        
+            if ($coords) {
+                $userData['lat'] = $coords['lat'];
+                $userData['lng'] = $coords['lng'];
+                $userData['region'] = $geo->makeRegion($coords['lat'], $coords['lng']);
+            }
         }
 
         if ($request->hasFile('anh_dai_dien')) {
@@ -111,12 +125,12 @@ class UserProfileController extends Controller
         $user = $user->fresh()->load('toChuc');
 
         $user->anh_dai_dien = $user->anh_dai_dien
-            ? asset('storage/' . $user->anh_dai_dien)
+            ? $this->resolveMediaUrl($user->anh_dai_dien)
             : null;
 
         if ($user->toChuc) {
             $user->toChuc->logo = $user->toChuc->logo
-                ? asset('storage/' . $user->toChuc->logo)
+                ? $this->resolveMediaUrl($user->toChuc->logo)
                 : null;
         }
 
@@ -170,31 +184,33 @@ class UserProfileController extends Controller
     public function show($id)
     {
         // 1. Người dùng
-        $user = User::select('ho_ten', 'ten_tai_khoan', 'anh_dai_dien')
+        $user = User::select('id','ho_ten', 'ten_tai_khoan', 'anh_dai_dien', 'created_at')
             ->findOrFail($id);
 
         if ($user->anh_dai_dien) {
-            $user->anh_dai_dien = asset('storage/' . $user->anh_dai_dien);
+            $user->anh_dai_dien = $this->resolveMediaUrl($user->anh_dai_dien);
         }
 
         // 2. Tổ chức
         $xacMinh = XacMinhToChuc::where('nguoi_dung_id', $id)
+            ->where('trang_thai', 'CHAP_NHAN')
             ->select('ten_to_chuc', 'mo_ta', 'loai_hinh')
             ->latest()
             ->first();
 
         $toChuc = ToChuc::where('nguoi_dung_id', $id)
-            ->select('logo')
+            ->select('id', 'logo')
             ->first();
 
         if ($toChuc && $toChuc->logo) {
-            $toChuc->logo = asset('storage/' . $toChuc->logo);
+            $toChuc->logo = $this->resolveMediaUrl($toChuc->logo);
         }
 
         // gộp lại đúng format yêu cầu
         $org = null;
         if ($xacMinh) {
             $org = [
+                'id' => $toChuc->id ?? null,
                 'ten_to_chuc' => $xacMinh->ten_to_chuc,
                 'mo_ta' => "Đại diện {$xacMinh->ten_to_chuc}. {$xacMinh->mo_ta}",
                 'logo' => $toChuc->logo ?? null,
@@ -203,23 +219,58 @@ class UserProfileController extends Controller
         }
 
         // 3. Bài đăng
-        $baiDang = BaiDang::where('nguoi_dung_id', $id)
-            ->select('tieu_de', 'mo_ta', 'dia_diem', 'trang_thai', 'created_at')
-            ->latest()
-            ->get()
-            ->map(function ($item) {
-                return [
-                    'tieu_de' => $item->tieu_de,
-                    'mo_ta' => $item->mo_ta,
-                    'dia_diem' => $item->dia_diem,
-                    'trang_thai' => $item->trang_thai,
-                    'ngay_dang' => $item->created_at->format('d/m/Y H:i'),
-                ];
-            });
+        $query = BaiDang::where('nguoi_dung_id', $id)
+            ->with(['nguoiDung'])
+            ->latest();
+
+        $this->applyPostLikeAggregates($query);
+
+        $baiDang = $query->get()->map(function (BaiDang $post) {
+            // xử lý ảnh (string hoặc array)
+            if (is_array($post->hinh_anh)) {
+                $paths = $post->hinh_anh;
+            } elseif (is_string($post->hinh_anh)) {
+                $paths = [$post->hinh_anh];
+            } else {
+                $paths = [];
+            }
+
+            $hinhAnhUrls = array_map(
+                fn ($p) => $this->resolveMediaUrl($p),
+                $paths
+            );
+
+            // avatar
+            $avatar = $post->nguoiDung && $post->nguoiDung->anh_dai_dien
+                ? $this->resolveMediaUrl($post->nguoiDung->anh_dai_dien)
+                : null;
+
+            $this->decoratePostLikeFields($post);
+
+            return [
+                'id' => $post->id,
+                'tieu_de' => $post->tieu_de,
+                'mo_ta' => $post->mo_ta,
+                'dia_diem' => $post->dia_diem,
+                'trang_thai' => $post->trang_thai,
+                'ngay_dang' => $post->created_at->format('d/m/Y H:i'),
+                'loai_bai' => $post->loai_bai,
+                'so_luong' => $post->so_luong,
+
+                'hinh_anh_urls' => $hinhAnhUrls,
+                'hinh_anh_url' => $hinhAnhUrls[0] ?? null,
+                'avatar_url' => $avatar,
+                'nguoi_dung_ten' => $post->nguoiDung?->ho_ten,
+
+                'so_luot_thich' => $post->so_luot_thich,
+                'so_binh_luan' => $post->so_binh_luan,
+                'da_thich' => $post->da_thich,
+            ];
+        });
 
         return response()->json([
             'nguoi_dung' => $user,
-            'to_chuc' => $toChuc,
+            'to_chuc' => $org,
             'bai_dang' => $baiDang,
         ]);
     }
@@ -229,13 +280,65 @@ class UserProfileController extends Controller
     {
         $user = auth()->user();
 
+        $diaChi = $request->dia_chi;
+
+        $geo = app(GeocodingService::class);
+        $coords = $geo->geocode($diaChi);
+
+        $lat = null;
+        $lng = null;
+        $region = null;
+
+        if ($coords) {
+            $lat = $coords['lat'];
+            $lng = $coords['lng'];
+            $region = $geo->makeRegion($lat, $lng);
+        }
+
         $user->update([
-            'dia_chi' => $request->dia_chi
+            'dia_chi' => $diaChi,
+            'lat' => $lat,
+            'lng' => $lng,
+            'region' => $region,
         ]);
 
         return response()->json([
             'message' => 'Cập nhật địa chỉ thành công',
             'data' => $user
         ]);
+    }
+
+    private function resolveMediaUrl(?string $value): ?string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        $raw = trim($value);
+        return preg_match('/^https?:\/\//i', $raw) === 1 ? $raw : secure_asset('storage/' . ltrim($raw, '/'));
+    }
+
+    private function applyPostLikeAggregates($query): void
+    {
+        $query->withCount([
+            'thichs as so_luot_thich',
+            'binhLuans as so_binh_luan',
+        ]);
+        if (Auth::check()) {
+            $uid = (int) Auth::id();
+            $query->withExists(['thichs as da_thich' => function ($q) use ($uid) {
+                $q->where('nguoi_dung_id', $uid);
+            }]);
+        }
+    }
+
+    private function decoratePostLikeFields(BaiDang $post): void
+    {
+        $post->setAttribute('so_luot_thich', (int) ($post->getAttribute('so_luot_thich') ?? 0));
+        $post->setAttribute('so_binh_luan', (int) ($post->getAttribute('so_binh_luan') ?? 0));
+        $post->setAttribute(
+            'da_thich',
+            Auth::check() ? (bool) $post->getAttribute('da_thich') : false
+        );
     }
 }

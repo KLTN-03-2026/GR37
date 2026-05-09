@@ -17,8 +17,12 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 use App\Services\ApprovalService;
 use App\Notifications\ApprovalNotification;
+use App\Notifications\AdminReviewRequiredNotification;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use App\Events\CampaignCreated;
+use App\Events\CampaignImportantUpdated;
 
 class CampaignController extends Controller
 {
@@ -113,6 +117,11 @@ class CampaignController extends Controller
             'trang_thai' => 'CHO_XU_LY'
         ]);
 
+        $this->notifyAdminsForPendingCampaign($chienDich);
+        event(new CampaignCreated(
+            campaignId: (int) $chienDich->id,
+            ownerUserId: (int) ($user->id ?? 0),
+        ));
         return response()->json([
             'message' => 'Tạo chiến dịch thành công, chờ duyệt',
             'data' => $chienDich
@@ -162,7 +171,7 @@ class CampaignController extends Controller
             }
 
             // nếu là path thì convert sang URL
-            return asset('storage/' . ltrim($img, '/'));
+            return secure_asset('storage/' . ltrim($img, '/'));
 
         }, $images);
 
@@ -231,8 +240,8 @@ class CampaignController extends Controller
 
         $anh_cu = array_map(function ($img) {
             // nếu là URL → chuyển về path
-            if (str_starts_with($img, asset('storage/'))) {
-                return str_replace(asset('storage/'), '', $img);
+            if (str_starts_with($img, secure_asset('storage/'))) {
+                return str_replace(secure_asset('storage/'), '', $img);
             }
 
             return $img; 
@@ -243,8 +252,8 @@ class CampaignController extends Controller
         foreach ($xoa_anh as $img) {
 
             // convert URL -> path
-            if (str_starts_with($img, asset('storage/'))) {
-                $path = str_replace(asset('storage/'), '', $img);
+            if (str_starts_with($img, secure_asset('storage/'))) {
+                $path = str_replace(secure_asset('storage/'), '', $img);
             } else {
                 $path = $img;
             }
@@ -261,7 +270,15 @@ class CampaignController extends Controller
         }
 
         $finalImages = array_values(array_merge($anh_cu, $anh_moi));
-        
+        $before = [
+            'ten_chien_dich' => (string) $chienDich->ten_chien_dich,
+            'mo_ta' => (string) $chienDich->mo_ta,
+            'muc_tieu_tien' => (string) $chienDich->muc_tieu_tien,
+            'ngay_ket_thuc' => (string) $chienDich->ngay_ket_thuc,
+            'vi_tri' => (string) $chienDich->vi_tri,
+            'lat' => (string) $chienDich->lat,
+            'lng' => (string) $chienDich->lng,
+        ];
         $chienDich->update([
             'danh_muc_id' => $request->danh_muc_id,
             'ten_chien_dich' => $request->ten_chien_dich,
@@ -275,13 +292,36 @@ class CampaignController extends Controller
             'lat' => $request->lat,
             'lng' => $request->lng,
         ]);
+        $after = [
+            'ten_chien_dich' => (string) $chienDich->ten_chien_dich,
+            'mo_ta' => (string) $chienDich->mo_ta,
+            'muc_tieu_tien' => (string) $chienDich->muc_tieu_tien,
+            'ngay_ket_thuc' => (string) $chienDich->ngay_ket_thuc,
+            'vi_tri' => (string) $chienDich->vi_tri,
+            'lat' => (string) $chienDich->lat,
+            'lng' => (string) $chienDich->lng,
+        ];
 
+        $importantFields = ['ten_chien_dich', 'mo_ta', 'muc_tieu_tien'];
+        $changed = [];
+        foreach ($importantFields as $f) {
+            if (($before[$f] ?? null) !== ($after[$f] ?? null)) {
+                $changed[] = $f;
+            }
+        }
+        if ($changed !== []) {
+            event(new CampaignImportantUpdated(
+                campaignId: (int) $chienDich->id,
+                ownerUserId: (int) ($user->id ?? 0),
+                changedFields: $changed,
+            ));
+        }
         $images = array_map(function ($img) {
             if (str_starts_with($img, 'http')) {
                 return $img;
             }
 
-            return asset('storage/' . ltrim($img, '/'));
+            return secure_asset('storage/' . ltrim($img, '/'));
         }, $finalImages);
         $chienDich->hinh_anh = $images;
 
@@ -309,8 +349,26 @@ class CampaignController extends Controller
     public function index(Request $request)
     {
         $query = ChienDichGayQuy::with(['toChuc', 'danhMuc'])
-            ->withCount('ungHos')
-            ->whereIn('trang_thai', ['HOAT_DONG', 'HOAN_THANH', 'TAM_DUNG', 'DA_KET_THUC']);
+            ->withCount('ungHos');
+        
+        $user = auth()->user();
+        if ($user && $user->id == 1) {
+            $query->whereIn('trang_thai', [
+                'CHO_XU_LY',
+                'HOAT_DONG',
+                'HOAN_THANH',
+                'TU_CHOI',
+                'TAM_DUNG',
+                'DA_KET_THUC'
+            ]);
+        } else {
+            $query->whereIn('trang_thai', [
+                'HOAT_DONG',
+                'HOAN_THANH',
+                'TAM_DUNG',
+                'DA_KET_THUC'
+            ]);
+        }
 
         if ($request->has(['min_lat', 'max_lat', 'min_lng', 'max_lng'])) {
             $query->whereBetween('lat', [$request->min_lat, $request->max_lat])
@@ -328,18 +386,26 @@ class CampaignController extends Controller
         if ($request->trang_thai) {
             $query->where('trang_thai', $request->trang_thai);
         }
-
+        if ($request->boolean('only_violations')) {
+            $query->whereHas('canhBaoGianLan', function ($q) {
+                $q->where('target_type', 'campaign')
+                  ->where('trang_thai', 'CHO_XU_LY');
+            });
+        }
         $query->orderByRaw("
             CASE 
-                WHEN trang_thai = 'HOAT_DONG' THEN 1
-                WHEN trang_thai = 'HOAN_THANH' THEN 2
-                WHEN trang_thai = 'TAM_DUNG' THEN 3
-                WHEN trang_thai = 'DA_KET_THUC' THEN 4
-                ELSE 5
+                WHEN trang_thai = 'CHO_XU_LY' THEN 1
+                WHEN trang_thai = 'HOAT_DONG' THEN 2
+                WHEN trang_thai = 'HOAN_THANH' THEN 3
+                WHEN trang_thai = 'TU_CHOI' THEN 4
+                WHEN trang_thai = 'TAM_DUNG' THEN 5
+                WHEN trang_thai = 'DA_KET_THUC' THEN 6
+                ELSE 7
             END
         ");
 
-        $campaigns = $query->paginate(8);
+        $perPage = $request->per_page ?? 8;
+        $campaigns = $query->paginate($perPage);
 
         // format lại dữ liệu cho FE
         $campaigns->getCollection()->transform(fn($item) 
@@ -423,7 +489,7 @@ class CampaignController extends Controller
             }
 
             // nếu là path thì convert sang URL
-            return asset('storage/' . $img);
+            return secure_asset('storage/' . $img);
 
         }, $images);
 
@@ -431,6 +497,7 @@ class CampaignController extends Controller
 
         $donations = DB::table('ung_ho as uh')
             ->leftJoin('nguoi_dung as nd', 'uh.nguoi_dung_id', '=', 'nd.id')
+            ->where('uh.trang_thai', 'THANH_CONG')
             ->select(
                 'uh.so_tien',
                 'uh.created_at',
@@ -450,6 +517,7 @@ class CampaignController extends Controller
         
         $soLuotUngHo = DB::table('ung_ho')
             ->where('chien_dich_gay_quy_id', $chienDich->id)
+            ->where('trang_thai', 'THANH_CONG')
             ->count();
 
         $expensesGrouped = collect($chienDich->chiTieus ?? [])
@@ -479,15 +547,11 @@ class CampaignController extends Controller
             'mo_ta' => $chienDich->mo_ta,
             'ten_danh_muc' => $chienDich->danhMuc->ten_danh_muc ?? null,
             'trang_thai' => $chienDich->trang_thai,
-
-
             'hinh_anh' => $images,
-
             'so_tien_da_nhan' => $chienDich->so_tien_da_nhan,
             'muc_tieu_tien' => $chienDich->muc_tieu_tien,
             'phan_tram' => $phanTram,
             'ma_noi_dung_ck' => $chienDich->ma_noi_dung_ck,
-
             'ngay_bat_dau' => optional($chienDich->created_at)->format('d/m/Y'),
             'ngay_ket_thuc' => \Carbon\Carbon::parse($chienDich->ngay_ket_thuc)->format('d/m/Y'),
             'so_ngay_con_lai' => $ngayConLai,
@@ -499,7 +563,7 @@ class CampaignController extends Controller
             'to_chuc' => [
                 'id' => $chienDich->toChuc->id ?? null,
                 'ten_to_chuc' => $chienDich->toChuc->ten_to_chuc ?? null,
-                'logo' => $chienDich->toChuc->logo ? asset('storage/' . $chienDich->toChuc->logo) : null,
+                'logo' => $chienDich->toChuc->logo ? secure_asset('storage/' . $chienDich->toChuc->logo) : null,
                 'mo_ta' => $chienDich->toChuc->mo_ta ?? null,
                 'dia_chi' => $chienDich->toChuc->dia_chi ?? null,
                 'email' => $chienDich->toChuc->email ?? null,
@@ -518,7 +582,10 @@ class CampaignController extends Controller
         $campaign = ChienDichGayQuy::findOrFail($id);
 
         $service->approve($campaign);
-
+        event(new CampaignCreated(
+            campaignId: (int) $campaign->id,
+            ownerUserId: (int) ($campaign->toChuc->user->id ?? 0),
+        ));
         $user = $campaign->toChuc->user;
 
         $user->notify(new ApprovalNotification(
@@ -554,6 +621,71 @@ class CampaignController extends Controller
         return response()->json([
             'message' => 'Đã từ chối chiến dịch'
         ]);
+    }
+
+    // ADMIN tạm dừng chiến dịch vi phạm
+    public function suspendCampaign(Request $request, int $id)
+    {
+        $request->validate([
+            'ly_do' => 'nullable|string|max:255|required_without:violation_reason',
+            'violation_reason' => 'nullable|array|required_without:ly_do',
+            'violation_reason.code' => 'nullable|string|max:100',
+            'violation_reason.title' => 'nullable|string|max:255',
+            'violation_reason.description' => 'nullable|string|max:255',
+            'mo_ta' => 'nullable|string|max:255',
+        ]);
+
+        $lyDoThongBao = $this->resolveViolationReasonText($request);
+        $campaign = ChienDichGayQuy::findOrFail($id);
+        if ($campaign->trang_thai === 'TAM_DUNG') {
+            return response()->json([
+                'message' => 'Chiến dịch đã ở trạng thái tạm dừng.',
+            ], 422);
+        }
+
+        $campaign->update([
+            'trang_thai' => 'TAM_DUNG',
+        ]);
+
+        $user = $campaign->toChuc->user;
+        if ($user) {
+            $user->notify(new ApprovalNotification(
+                'lock',
+                'Chiến dịch',
+                $lyDoThongBao,
+                'campaign',
+                (int) $campaign->id
+            ));
+        }
+
+        return response()->json([
+            'message' => 'Đã tạm dừng chiến dịch.',
+            'data' => [
+                'id' => (int) $campaign->id,
+                'trang_thai' => $campaign->trang_thai,
+            ],
+        ]);
+    }
+
+    private function resolveViolationReasonText(Request $request): string
+    {
+        $lyDo = trim((string) $request->input('ly_do', ''));
+        $reason = $request->input('violation_reason');
+        $moTa = trim((string) $request->input('mo_ta', ''));
+
+        if (is_array($reason)) {
+            $parts = array_values(array_filter([
+                isset($reason['title']) ? trim((string) $reason['title']) : '',
+                isset($reason['description']) ? trim((string) $reason['description']) : '',
+                $moTa,
+            ]));
+
+            if ($parts !== []) {
+                return mb_substr(implode(' - ', $parts), 0, 255);
+            }
+        }
+
+        return mb_substr($lyDo !== '' ? $lyDo : $moTa, 0, 255);
     }
 
     //chiến dịch nổi bật
@@ -596,7 +728,8 @@ class CampaignController extends Controller
         return [
             'id' => $item->id,
             'ten_chien_dich' => $item->ten_chien_dich,
-            'hinh_anh' => $image ? asset('storage/' . $image) : null,
+            'ten_to_chuc' => $item->toChuc->ten_to_chuc ?? null,
+            'hinh_anh' => $image ? secure_asset('storage/' . $image) : null,
             'so_tien_da_nhan' => $soTien,
             'muc_tieu_tien' => $mucTieu,
             'phan_tram' => $phanTram,
@@ -613,7 +746,7 @@ class CampaignController extends Controller
             ->select('id', 'ten_danh_muc', 'hinh_anh')
             ->get()
             ->map(function ($item) {
-                $item->hinh_anh = asset('storage/' . $item->hinh_anh);
+                $item->hinh_anh = secure_asset('storage/' . $item->hinh_anh);
                 return $item;
             });
 
@@ -652,6 +785,55 @@ class CampaignController extends Controller
         );
     }
 
+    //Lấy danh sách giao dịch rút + chi tiêu
+    public function getWithdrawWithExpenses($campaignId)
+    {
+        $data = DB::table('giao_dich_quy as gd')
+            ->leftJoin('chi_tieu_chien_dich as ct', 'gd.id', '=', 'ct.giao_dich_quy_id')
+            ->where('gd.chien_dich_gay_quy_id', $campaignId)
+            ->where('gd.loai_giao_dich', 'RUT')
+            ->select(
+                'gd.id as giao_dich_id',
+                'gd.so_tien as tong_tien_rut',
+                'gd.created_at',
+                'gd.mo_ta',
+
+                'ct.id as chi_tieu_id',
+                'ct.ten_hoat_dong',
+                'ct.so_tien',
+                'ct.mo_ta as mo_ta_chi_tieu'
+            )
+            ->orderByDesc('gd.created_at')
+            ->get()
+            ->groupBy('giao_dich_id')
+            ->map(function ($items) {
+
+                $first = $items->first();
+
+                return [
+                    'giao_dich_id' => $first->giao_dich_id,
+                    'tong_tien_rut' => (float) $first->tong_tien_rut,
+                    'thoi_gian' => \Carbon\Carbon::parse($first->created_at)->format('d/m/Y H:i'),
+                    'mo_ta' => $first->mo_ta,
+
+                    'chi_tieu' => collect($items)
+                        ->filter(fn($i) => $i->chi_tieu_id != null)
+                        ->map(function ($i) {
+                            return [
+                                'id' => $i->chi_tieu_id,
+                                'ten_hoat_dong' => $i->ten_hoat_dong,
+                                'so_tien' => (float) $i->so_tien,
+                                'mo_ta' => $i->mo_ta_chi_tieu
+                            ];
+                        })
+                        ->values()
+                ];
+            })
+            ->values();
+
+        return response()->json($data);
+    }
+
     //tạo hoạt động cho giao dịch rút
     public function storeExpense(StoreExpenseRequest $request, $campaignId)
     {
@@ -683,38 +865,79 @@ class CampaignController extends Controller
 
         try {
 
-            $tongNhap = collect($request->chi_tiet)->sum('so_tien');
+            $tongNhap = collect($request->chi_tiet)
+                ->sum(fn($item) => (float) $item['so_tien']);
 
             if ($tongNhap != $giaoDich->so_tien) {
+
+                DB::rollBack();
+
                 return response()->json([
                     'message' => 'Tổng chi phải bằng số tiền đã rút'
                 ], 400);
             }
 
+            $giaoDich->update([
+                'mo_ta' => $request->mo_ta
+            ]);
+
+            $savedIds = [];
             $data = [];
 
             foreach ($request->chi_tiet as $item) {
-                $data[] = ChiTieuChienDich::create([
-                    'chien_dich_gay_quy_id' => $chienDich->id,
-                    'giao_dich_quy_id' => $giaoDich->id,
-                    'ten_hoat_dong' => $item['ten_hoat_dong'],
-                    'so_tien' => $item['so_tien'],
-                    'mo_ta' => $request->mo_ta
-                ]);
+
+                // UPDATE
+                if (!empty($item['id'])) {
+
+                    $chiTieu = ChiTieuChienDich::where('id', $item['id'])
+                        ->where('giao_dich_quy_id', $giaoDich->id)
+                        ->first();
+
+                    if (!$chiTieu) {
+                        continue;
+                    }
+
+                    $chiTieu->update([
+                        'ten_hoat_dong' => $item['ten_hoat_dong'],
+                        'so_tien' => $item['so_tien'],
+                        'mo_ta' => $item['mo_ta'] ?? null
+                    ]);
+
+                } else {
+
+                    // CREATE
+                    $chiTieu = ChiTieuChienDich::create([
+                        'chien_dich_gay_quy_id' => $chienDich->id,
+                        'giao_dich_quy_id' => $giaoDich->id,
+                        'ten_hoat_dong' => $item['ten_hoat_dong'],
+                        'so_tien' => $item['so_tien'],
+                        'mo_ta' => $item['mo_ta'] ?? null
+                    ]);
+                }
+
+                $savedIds[] = $chiTieu->id;
+                $data[] = $chiTieu;
             }
+
+            // XÓA các item đã bị remove khỏi form
+            ChiTieuChienDich::where('giao_dich_quy_id', $giaoDich->id)
+                ->whereNotIn('id', $savedIds)
+                ->delete();
 
             DB::commit();
 
             return response()->json([
-                'message' => 'Khai báo chi tiêu thành công',
+                'message' => 'Cập nhật chi tiêu thành công',
                 'data' => $data
             ]);
 
         } catch (\Exception $e) {
+
             DB::rollBack();
 
             return response()->json([
-                'message' => 'Có lỗi xảy ra'
+                'message' => 'Có lỗi xảy ra',
+                'error' => $e->getMessage()
             ], 500);
         }
     }
@@ -755,5 +978,20 @@ class CampaignController extends Controller
         return response()->json([
             'data' => $data
         ]);
+    } 
+    private function notifyAdminsForPendingCampaign(ChienDichGayQuy $campaign): void
+    {
+        $admins = User::query()
+            ->whereHas('roles', fn ($q) => $q->where('ten_vai_tro', 'ADMIN'))
+            ->get();
+
+        foreach ($admins as $admin) {
+            $admin->notify(new AdminReviewRequiredNotification(
+                targetType: 'campaign',
+                targetId: (int) $campaign->id,
+                title: 'Có chiến dịch mới chờ duyệt',
+                message: 'Chiến dịch "' . $campaign->ten_chien_dich . '" đang chờ admin duyệt.'
+            ));
+        }
     }
 }

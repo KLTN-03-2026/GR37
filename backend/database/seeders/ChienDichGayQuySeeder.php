@@ -219,7 +219,7 @@ class ChienDichGayQuySeeder extends Seeder
                 // Lấy thêm 1–4 ảnh random khác (không trùng ảnh đầu)
                 $otherImages = collect($files)
                     ->reject(fn($f) => $f === $firstImage)
-                    ->random(min(4, $totalFiles - 1));
+                    ->random(min(3, $totalFiles - 1));
 
                 // Merge lại → ảnh đầu tiên luôn unique theo index
                 $images = collect([$firstImage])

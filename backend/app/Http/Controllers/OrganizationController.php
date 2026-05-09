@@ -4,8 +4,11 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\XacMinhToChuc;
+use App\Notifications\AdminReviewRequiredNotification;
+use App\Models\User;
 use App\Models\TaiKhoanGayQuy;
 use App\Models\ToChuc;
+use App\Models\VaiTro;
 use App\Http\Requests\Organization\OrganizationRegisterRequest;
 use Illuminate\Support\Facades\DB;
 use App\Notifications\ApprovalNotification;
@@ -54,14 +57,15 @@ class OrganizationController extends Controller
             ]);
 
             $org->giay_phep = $org->giay_phep 
-                ? asset('storage/' . $org->giay_phep) 
+                ? secure_asset('storage/' . $org->giay_phep) 
                 : null;
 
             $org->logo = $org->logo 
-                ? asset('storage/' . $org->logo) 
+                ? secure_asset('storage/' . $org->logo) 
                 : null;
 
             DB::commit();
+                    $this->notifyAdminsForPendingOrganization($org);
 
             return response()->json([
                 'message' => 'Đăng ký thành công, vui lòng chờ admin duyệt',
@@ -102,11 +106,26 @@ class OrganizationController extends Controller
                 'duyet_luc' => now()
             ]);
 
-            // nâng quyền user thành tổ chức
-            DB::table('nguoi_dung_vai_tro')->updateOrInsert([
-                'nguoi_dung_id' => $org->nguoi_dung_id,
-                'vai_tro_id' => 3, 
-            ]);
+            // chuyển quyền user sang tổ chức bằng tên role (tránh hard-code id)
+            $toChucRoleId = VaiTro::where('ten_vai_tro', 'TO_CHUC')->value('id');
+            $nguoiDungRoleId = VaiTro::where('ten_vai_tro', 'NGUOI_DUNG')->value('id');
+
+            if (!$toChucRoleId || !$nguoiDungRoleId) {
+                throw new \RuntimeException('Thiếu cấu hình vai trò TO_CHUC/NGUOI_DUNG');
+            }
+
+            DB::table('nguoi_dung_vai_tro')->updateOrInsert(
+                [
+                    'nguoi_dung_id' => $org->nguoi_dung_id,
+                    'vai_tro_id' => $toChucRoleId,
+                ],
+                []
+            );
+
+            DB::table('nguoi_dung_vai_tro')
+                ->where('nguoi_dung_id', $org->nguoi_dung_id)
+                ->where('vai_tro_id', $nguoiDungRoleId)
+                ->delete();
 
             $toChuc = ToChuc::updateOrCreate(
                 ['nguoi_dung_id' => $org->nguoi_dung_id],
@@ -148,7 +167,8 @@ class OrganizationController extends Controller
 
                 $fileName = 'qr_' . time() . '_' . Str::random(5) . '.png';
 
-                Storage::disk('public')->put($fileName, $result->getString());
+                $path = 'qr_code/' . $fileName;
+                Storage::disk('public')->put($path, $result->getString());
 
                 // tạo tài khoản gây quỹ
                 TaiKhoanGayQuy::create([
@@ -160,7 +180,7 @@ class OrganizationController extends Controller
                     'ma_yeu_cau_mb' => $mb['request_id'],
                     'so_du' => 0,
                     'trang_thai' => 'HOAT_DONG',
-                    'qr_code' => 'storage/' . $fileName
+                    'qr_code' => $path
                 ]);
             }
 
@@ -168,7 +188,13 @@ class OrganizationController extends Controller
 
             // notification
             $org->user->notify(
-                new ApprovalNotification('approve', 'Tổ chức & tài khoản gây quỹ')
+                new ApprovalNotification(
+                    'approve',
+                    'Tổ chức & tài khoản gây quỹ',
+                    null,
+                    'organization',
+                    (int) $org->id
+                )
             );
 
             return response()->json([
@@ -210,7 +236,9 @@ class OrganizationController extends Controller
             new ApprovalNotification(
                 'reject',
                 'Tổ chức',
-                $request->ly_do
+                $request->ly_do,
+                'organization',
+                (int) $org->id
             )
         );
 
@@ -287,7 +315,7 @@ class OrganizationController extends Controller
             return [
                 'id' => $org->id,
                 'ten_to_chuc' => $org->ten_to_chuc,
-                'logo' => $org->logo ? asset('storage/' . $org->logo) : null,
+                'logo' => $org->logo ? secure_asset('storage/' . $org->logo) : null,
                 'dia_chi' => $org->dia_chi,
                 'tong_gay_quy' => (float) $org->tong_gay_quy,
                 'so_tai_khoan' => optional($org->taiKhoanGayQuy)->so_tai_khoan,
@@ -319,7 +347,7 @@ class OrganizationController extends Controller
                 $hinhAnh = null;
                 if ($cd->hinh_anh) {
                     $arr = json_decode($cd->hinh_anh, true);
-                    $hinhAnh = isset($arr[0]) ? asset('storage/' . $arr[0]) : null;
+                    $hinhAnh = isset($arr[0]) ? secure_asset('storage/' . $arr[0]) : null;
                 }
 
                 // % hoàn thành
@@ -352,8 +380,6 @@ class OrganizationController extends Controller
                     'phan_tram' => $phanTram,
                     'trang_thai' => $cd->trang_thai,
                     'so_ngay_con_lai' => $soNgayConLai,
-
-                    // giống UI
                     'so_luot_ung_ho' => $soLuotUngHo,
                 ];
             });
@@ -367,7 +393,8 @@ class OrganizationController extends Controller
         $tongChi = DB::table('giao_dich_quy')
             ->join('tai_khoan_gay_quy', 'giao_dich_quy.tai_khoan_gay_quy_id', '=', 'tai_khoan_gay_quy.id')
             ->where('tai_khoan_gay_quy.to_chuc_id', $id)
-            ->where('loai_giao_dich', 'RUT')
+            ->where('giao_dich_quy.loai_giao_dich', 'RUT')
+            ->where('giao_dich_quy.trang_thai', 'DA_DUYET')
             ->sum('so_tien');
 
         // Tổng chiến dịch
@@ -383,11 +410,22 @@ class OrganizationController extends Controller
 
         $tk = $org->taiKhoanGayQuy;
 
+        $expenseSummary = DB::table('chi_tieu_chien_dich')
+            ->join('chien_dich_gay_quy', 'chi_tieu_chien_dich.chien_dich_gay_quy_id', '=', 'chien_dich_gay_quy.id')
+            ->where('chien_dich_gay_quy.to_chuc_id', $id)
+            ->select(
+                'ten_hoat_dong',
+                DB::raw('SUM(so_tien) as tong_tien')
+            )
+            ->groupBy('ten_hoat_dong')
+            ->orderByDesc('tong_tien')
+            ->get();
+
         return response()->json([
             // thông tin tổ chức
             'id' => $org->id,
             'ten_to_chuc' => $org->ten_to_chuc,
-            'logo' => $org->logo ? asset('storage/' . $org->logo) : null,
+            'logo' => $org->logo ? secure_asset('storage/' . $org->logo) : null,
             'mo_ta' => $org->mo_ta,
             'dia_chi' => $org->dia_chi,
             'so_dien_thoai' => $org->so_dien_thoai,
@@ -399,16 +437,18 @@ class OrganizationController extends Controller
             // tài khoản
             'ten_tai_khoan' => optional($tk)->chu_tai_khoan,
             'so_tai_khoan' => optional($tk)->so_tai_khoan,
-            'so_du_hien_tai' => (float) optional($tk)->so_du ?? 0,
             'qr_code' => optional($tk)->qr_code 
-                ? asset('storage/' . $tk->qr_code) 
+                ? secure_asset('storage/' . $tk->qr_code) 
                 : null,
 
             // thống kê (match UI)
             'tong_thu' => (float) $tongThu,
             'tong_chi' => (float) $tongChi,
+            'so_du_hien_tai' => (float) ($tongThu - $tongChi),
             'tong_chien_dich' => $tongChienDich,
             'tong_luot_ung_ho' => $tongLuotUngHo,
+
+            'expense_summary' => $expenseSummary,
         ]);
     }
 
@@ -442,7 +482,9 @@ class OrganizationController extends Controller
             new ApprovalNotification(
                 'lock',
                 'Tài khoản gây quỹ',
-                $request->ly_do
+                $request->ly_do,
+                'fund_account',
+                (int) $tk->id
             )
         );
 
@@ -483,5 +525,20 @@ class OrganizationController extends Controller
         }
 
         return $str;
+    }
+    private function notifyAdminsForPendingOrganization(XacMinhToChuc $org): void
+    {
+        $admins = User::query()
+            ->whereHas('roles', fn ($q) => $q->where('ten_vai_tro', 'ADMIN'))
+            ->get();
+
+        foreach ($admins as $admin) {
+            $admin->notify(new AdminReviewRequiredNotification(
+                targetType: 'organization',
+                targetId: (int) $org->id,
+                title: 'Có tổ chức mới chờ duyệt',
+                message: 'Tổ chức "' . $org->ten_to_chuc . '" vừa gửi hồ sơ xác minh.'
+            ));
+        }
     }
 }

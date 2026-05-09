@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\VaiTro;
 use Illuminate\Support\Facades\Hash;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Requests\Auth\LoginRequest;
@@ -13,6 +14,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\View;
+use Illuminate\Support\Facades\Http;
 
 class AuthController extends Controller
 {
@@ -50,7 +53,13 @@ class AuthController extends Controller
             'trang_thai' => 'HOAT_DONG'
         ]);
 
-        $user->roles()->attach(2);
+        $nguoiDungRoleId = VaiTro::where('ten_vai_tro', 'NGUOI_DUNG')->value('id');
+        if (!$nguoiDungRoleId) {
+            return response()->json([
+                'message' => 'Thiếu cấu hình vai trò mặc định'
+            ], 500);
+        }
+        $user->roles()->syncWithoutDetaching([$nguoiDungRoleId]);
 
         Cache::forget('register_' . $request->email);
 
@@ -87,10 +96,32 @@ class AuthController extends Controller
 
         Cache::put('otp_limit_' . $data['email'], true, 60);
 
-        Mail::send('emails.otp', ['otp' => $otp], function ($message) use ($data) {
-            $message->to($data['email'])
-                    ->subject('Mã xác minh đăng ký');
-        });
+        $html = View::make('emails.otp', [
+            'otp' => $otp
+        ])->render();
+
+        // gửi qua Brevo API
+        $response = Http::withHeaders([
+            'api-key' => env('BREVO_API_KEY'),
+            'Content-Type' => 'application/json'
+        ])->post('https://api.brevo.com/v3/smtp/email', [
+            "sender" => [
+                "name" => "SmartDonate",
+                "email" => "ngthaonhubinh@gmail.com"
+            ],
+            "to" => [
+                ["email" => $data['email']]
+            ],
+            "subject" => "Mã xác minh đăng ký",
+            "htmlContent" => $html
+        ]);
+
+        if (!$response->successful()) {
+            return response()->json([
+                'message' => 'Gửi OTP thất bại',
+                'error' => $response->body()
+            ], 500);
+        }
 
         return response()->json([
             'message' => 'OTP đã được gửi về email'
@@ -104,7 +135,7 @@ class AuthController extends Controller
         $data = Cache::get('register_token_' . $token);
 
         if (!$data) {
-            return redirect("http://localhost:5173/dang-nhap?verified=invalid");
+            return redirect("https://smartdonate-phi.vercel.app/dang-nhap?verified=invalid");
         }
 
         // tạo username
@@ -126,11 +157,17 @@ class AuthController extends Controller
             'trang_thai' => 'HOAT_DONG'
         ]);
 
-        $user->roles()->attach(2);
+        $nguoiDungRoleId = VaiTro::where('ten_vai_tro', 'NGUOI_DUNG')->value('id');
+        if (!$nguoiDungRoleId) {
+            return response()->json([
+                'message' => 'Thiếu cấu hình vai trò mặc định'
+            ], 500);
+        }
+        $user->roles()->syncWithoutDetaching([$nguoiDungRoleId]);
 
         Cache::forget('register_token_' . $token);
 
-        return redirect("http://localhost:5173/dang-nhap?verified=success");
+        return redirect("https://smartdonate-phi.vercel.app/dang-nhap?verified=success");
     }
 
     // đăng nhập
@@ -169,8 +206,9 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         $user = $request->user()->load('roles');
+        $user->anh_dai_dien = $this->resolveMediaUrl($user->anh_dai_dien);
         return response()->json([
-            'user' => $request->user(),
+            'user' => $user,
             'roles' => $user->roles->pluck('ten_vai_tro'),
             'has_password' => $user->mat_khau ? true : false
         ]);
@@ -191,10 +229,31 @@ class AuthController extends Controller
 
         Cache::put('register_' . $email, $data, now()->addMinutes(5));
 
-        Mail::send('emails.otp', ['otp' => $otp], function ($message) use ($data) {
-            $message->to($data['email'])
-                    ->subject('Mã xác minh đăng ký');
-        });
+        $html = View::make('emails.otp', [
+            'otp' => $otp
+        ])->render();
+
+        $response = Http::withHeaders([
+            'api-key' => env('BREVO_API_KEY'),
+            'Content-Type' => 'application/json'
+        ])->post('https://api.brevo.com/v3/smtp/email', [
+            "sender" => [
+                "name" => "SmartDonate",
+                "email" => "ngthaonhubinh@gmail.com"
+            ],
+            "to" => [
+                ["email" => $data['email']]
+            ],
+            "subject" => "Mã xác minh đăng ký",
+            "htmlContent" => $html
+        ]);
+
+        if (!$response->successful()) {
+            return response()->json([
+                'message' => 'Gửi OTP thất bại',
+                'error' => $response->body()
+            ], 500);
+        }
 
         return response()->json(['message' => 'OTP đã được gửi lại']);
     }
@@ -223,10 +282,31 @@ class AuthController extends Controller
         Cache::put('forgot_' . $email, $otp, now()->addMinutes(5));
         Cache::put('forgot_limit_' . $email, true, 60);
 
-        Mail::send('emails.otp', ['otp' => $otp], function ($message) use ($email) {
-            $message->to($email)
-                    ->subject('Quên mật khẩu');
-        });
+        $html = View::make('emails.otp', [
+            'otp' => $otp
+        ])->render();
+
+        $response = Http::withHeaders([
+            'api-key' => env('BREVO_API_KEY'),
+            'Content-Type' => 'application/json'
+        ])->post('https://api.brevo.com/v3/smtp/email', [
+            "sender" => [
+                "name" => "SmartDonate",
+                "email" => "ngthaonhubinh@gmail.com"
+            ],
+            "to" => [
+                ["email" => $email]
+            ],
+            "subject" => "Quên mật khẩu",
+            "htmlContent" => $html
+        ]);
+
+        if (!$response->successful()) {
+            return response()->json([
+                'message' => 'Gửi OTP thất bại',
+                'error' => $response->body()
+            ], 500);
+        }
 
         return response()->json([
             'message' => 'OTP đã được gửi về email'
@@ -284,5 +364,15 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Đặt lại mật khẩu thành công'
         ]);
+    }
+
+    private function resolveMediaUrl(?string $value): ?string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        $raw = trim($value);
+        return preg_match('/^https?:\/\//i', $raw) === 1 ? $raw : secure_asset('storage/' . ltrim($raw, '/'));
     }
 }
