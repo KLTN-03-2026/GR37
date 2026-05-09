@@ -6,42 +6,74 @@ import {
   MailOutlined,
   LockOutlined,
   SafetyOutlined,
+  KeyOutlined,
 } from "@ant-design/icons";
-import { registerAPI } from "../../../api/authService";
+import { registerAPI, sendOtpAPI } from "../../../api/authService";
 import logo from "../../../assets/logo.png";
 import "./Register.scss";
 
 export default function Register() {
   const navigate = useNavigate();
   const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
+  const [loadingSendOtp, setLoadingSendOtp] = useState(false);
+  const [loadingRegister, setLoadingRegister] = useState(false);
 
-  const handleSubmit = async (values) => {
+  const handleSendOtp = async () => {
     try {
-      setLoading(true);
+      const values = await form.validateFields(["ho_ten", "e_m", "m_k", "x_n"]);
 
-      await registerAPI({
+      setLoadingSendOtp(true);
+
+      await sendOtpAPI({
         ho_ten: values.ho_ten,
         email: values.e_m,
         password: values.m_k,
-        password_confirmation: values.x_n,
+        confirm_password: values.x_n,
       });
 
       notification.success({
-        message: "Đăng ký thành công!",
+        message: "Gửi mã thành công",
+        description: "Vui lòng kiểm tra email để lấy OTP",
+      });
+    } catch (err) {
+      if (err.errorFields) {
+        return;
+      }
+
+      notification.error({
+        message: "Gửi mã thất bại",
+        description: err.response?.data?.message || "Lỗi!",
+      });
+    } finally {
+      setLoadingSendOtp(false);
+    }
+  };
+
+  const handleSubmit = async (values) => {
+    try {
+      setLoadingRegister(true);
+
+      await registerAPI({
+        email: values.e_m,
+        otp: values.x_code,
       });
 
-      // delay nhẹ để thấy notification
+      notification.success({
+        message: "Đăng ký thành công",
+      });
+
       setTimeout(() => {
         navigate("/dang-nhap");
       }, 1000);
+
+      form.resetFields();
     } catch (err) {
       notification.error({
         message: "Đăng ký thất bại!",
         description: err.response?.data?.message || "Lỗi!",
       });
     } finally {
-      setLoading(false);
+      setLoadingRegister(false);
     }
   };
 
@@ -92,7 +124,6 @@ export default function Register() {
               <Form.Item
                 name="e_m"
                 label="Email"
-
                 rules={[
                   { required: true, message: "Vui lòng nhập email!" },
                   { type: "email", message: "Email không hợp lệ!" },
@@ -147,6 +178,36 @@ export default function Register() {
                 />
               </Form.Item>
 
+              <Form.Item label="Mã xác nhận" required>
+                <Input.Group compact style={{ display: "flex" }}>
+                  <Form.Item
+                    name="x_code"
+                    noStyle
+                    rules={[
+                      { required: true, message: "Vui lòng nhập mã xác nhận!" },
+                    ]}
+                  >
+                    <Input
+                      prefix={<KeyOutlined />}
+                      placeholder="Nhập mã từ email"
+                      size="large"
+                      style={{ flex: 3 }}
+                      maxLength={8}
+                      inputMode="numeric"
+                    />
+                  </Form.Item>
+                  <Button
+                    size="large"
+                    style={{ flex: 1 }}
+                    className="send-code-btn-outline"
+                    onClick={handleSendOtp}
+                    loading={loadingSendOtp}
+                  >
+                    Gửi mã
+                  </Button>
+                </Input.Group>
+              </Form.Item>
+
               <Form.Item
                 name="agree"
                 valuePropName="checked"
@@ -172,7 +233,7 @@ export default function Register() {
                   htmlType="submit"
                   size="large"
                   block
-                  loading={loading}
+                  loading={loadingRegister}
                   className="submit-btn"
                 >
                   Đăng ký

@@ -8,7 +8,7 @@ import {
   FiX,
   FiChevronRight,
   FiCornerDownRight,
-  FiPackage
+  FiPackage,
 } from "react-icons/fi";
 import {
   FaHeart,
@@ -28,6 +28,22 @@ import { RiRobot2Line, RiSparklingLine } from "react-icons/ri";
 import "./styles.scss";
 import { formatPostTime } from "../../utils/formatTime";
 
+const getAvatar = (url) => {
+  if (!url) return null;
+
+  if (url.includes("storage/https://")) {
+    return url.split("storage/")[1];
+  }
+
+  return url;
+};
+
+const fixAvatarUrl = (url) => {
+  if (!url) return null;
+  if (url.startsWith("http://")) return url.replace("http://", "https://");
+  return url;
+};
+
 function CommentBubble({
   comment,
   onReply,
@@ -43,7 +59,7 @@ function CommentBubble({
     <div className={`pdc__comment${isReply ? " pdc__comment--reply" : ""}`}>
       <div className="pdc__comment-avatar">
         {comment.nguoi_dung?.avatar_url ? (
-          <img src={comment.nguoi_dung.avatar_url} alt="avatar" />
+          <img src={getAvatar(comment.nguoi_dung?.avatar_url)} alt="avatar" />
         ) : (
           (comment.nguoi_dung?.ho_ten?.[0]?.toUpperCase() ?? "?")
         )}
@@ -93,10 +109,16 @@ function CommentBubble({
 export default function PostDetailModal({ post, visible, onClose }) {
   const { toggleLike, posts } = usePostStore();
   const postFromStore = posts.find((p) => p.id === post?.id);
-  const liked = postFromStore?.liked ?? false;
-  const likeCount = postFromStore?.so_luot_thich ?? 0;
-  const cmtCount = postFromStore?.so_binh_luan ?? 0;
-
+  const liked = postFromStore?.liked ?? post?.liked ?? false;
+  const likeCount =
+    postFromStore?.so_luot_thich ?? post?.likeCount ?? post?.so_luot_thich ?? 0;
+  const cmtCount =
+    postFromStore?.so_binh_luan ??
+    post?.commentCount ??
+    post?.so_binh_luan ??
+    0;
+  const [activePostId, setActivePostId] = useState(null);
+  const { fetchPostDetail, postDetail } = usePostStore();
   const [commentText, setCommentText] = useState("");
   const [replyingTo, setReplyingTo] = useState(null);
   const [expandedReplies, setExpandedReplies] = useState({});
@@ -115,8 +137,58 @@ export default function PostDetailModal({ post, visible, onClose }) {
   const rawStatus = post?.trang_thai;
   const soLuong = post?.so_luong ?? post?.quantity ?? null;
   const showQuantityTag = soLuong !== null && soLuong !== 0 && soLuong !== "";
-
   const isDone = rawStatus === "DA_NHAN" || rawStatus === "DA_TANG";
+  const fetchMatches = usePostStore((s) => s.fetchMatches);
+  const myUserId = useAuthStore((s) => Number(s.user?.id || 0));
+
+  useEffect(() => {
+    if (activePostId && activePostId !== post.id) {
+      fetchPostDetail(activePostId);
+    }
+  }, [activePostId]);
+
+  useEffect(() => {
+    if (!post?.id) return;
+    if (post.nguoi_dung_id === myUserId) {
+      fetchMatches(post.id);
+    }
+  }, [post?.id]);
+
+  const fetchedPost = postDetail[String(activePostId)];
+
+  const activePost =
+    activePostId === null
+      ? null
+      : activePostId === post.id
+        ? post
+        : fetchedPost
+          ? {
+              id: fetchedPost.id,
+              type: fetchedPost.loai_bai?.toLowerCase(),
+              user: {
+                id: fetchedPost.nguoi_dung?.id,
+                name: fetchedPost.nguoi_dung?.ho_ten,
+                avatar: fetchedPost.nguoi_dung?.ho_ten?.charAt(0) || "?",
+                avatar_url:
+                  p.nguoi_dung?.anh_dai_dien ||
+                  p.nguoi_dung?.avatar_url ||
+                  null,
+                color: "#1890ff",
+              },
+              location: fetchedPost.dia_diem,
+              time: formatPostTime(fetchedPost.created_at),
+              title: fetchedPost.tieu_de,
+              desc: fetchedPost.mo_ta,
+              images: fetchedPost.hinh_anh_urls || [],
+              trang_thai: fetchedPost.trang_thai,
+              nguoi_dung_id: fetchedPost.nguoi_dung?.id,
+              liked: fetchedPost.da_thich ?? false,
+              so_luot_thich: fetchedPost.so_luot_thich ?? 0,
+              aiSuggestions: [],
+            }
+          : null;
+
+  const displayPost = activePost || post;
 
   const statusLabelMap = {
     CON_TANG: "Còn tặng",
@@ -163,7 +235,7 @@ export default function PostDetailModal({ post, visible, onClose }) {
   };
 
   const handleLikePost = async () => {
-    await toggleLike(post.id);
+    await toggleLike(displayPost.id);
   };
 
   const handleReply = (commentId, userName) => {
@@ -229,6 +301,34 @@ export default function PostDetailModal({ post, visible, onClose }) {
     }
   };
 
+  const handleShare = async (e) => {
+    e.stopPropagation();
+    const url = `https://smartdonate-phi.vercel.app/bai-dang/${post.id}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: post.title,
+          text: `${post.title} — SmartDonate`,
+          url,
+        });
+        return;
+      } catch {}
+    }
+
+    try {
+      await navigator.clipboard.writeText(url);
+      notification.success({
+        message: "Đã sao chép liên kết",
+        description: "Bạn có thể dán vào Messenger, Zalo, Facebook...",
+        placement: "topRight",
+        duration: 2,
+      });
+    } catch {
+      notification.error({ message: "Không thể sao chép, thử lại nhé" });
+    }
+  };
+
   const toggleReplies = (commentId) => {
     setExpandedReplies((prev) => ({
       ...prev,
@@ -236,13 +336,18 @@ export default function PostDetailModal({ post, visible, onClose }) {
     }));
   };
 
+  const handleClose = () => {
+    setActivePostId(null);
+    onClose();
+  };
+
   return createPortal(
-    <div className="pdc__overlay" onClick={onClose}>
+    <div className="pdc__overlay" onClick={handleClose}>
       <div
         className={`pdc${hasAiSuggestions ? " pdc--ai" : ""}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <button className="pdc__close-btn" onClick={onClose}>
+        <button className="pdc__close-btn" onClick={handleClose}>
           <FiX size={20} />
         </button>
 
@@ -252,26 +357,50 @@ export default function PostDetailModal({ post, visible, onClose }) {
             <div className="pdc__header">
               <div
                 className="pdc__avatar"
-                style={{ background: post.user.color }}
+                style={{ background: displayPost.user.color }}
               >
-                {post.user.avatar}
+                {(() => {
+                  const rawUrl =
+                    displayPost.user?.avatar_url ||
+                    displayPost.user?.anh_dai_dien ||
+                    null;
+                  const finalAvatar = fixAvatarUrl(getAvatar(rawUrl));
+                  return finalAvatar ? (
+                    <img
+                      src={finalAvatar}
+                      alt="avatar"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        borderRadius: "50%",
+                      }}
+                    />
+                  ) : (
+                    <span
+                      style={{ color: "#fff", fontWeight: 600, fontSize: 16 }}
+                    >
+                      {displayPost.user.avatar}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="pdc__user-info">
-                <div className="pdc__username">{post.user.name}</div>
+                <div className="pdc__username">{displayPost.user.name}</div>
                 <div className="pdc__meta">
                   <span className="pdc__location">
-                    <FiMapPin size={11} /> {post.location}
+                    <FiMapPin size={11} /> {displayPost.location}
                   </span>
                   <span className="pdc__meta-dot">·</span>
                   <span className="pdc__time">
-                    <FiClock size={11} /> {post.time}
+                    <FiClock size={11} /> {displayPost.time}
                   </span>
                 </div>
               </div>
             </div>
 
-            <h2 className="pdc__title">{post.title}</h2>
-            <p className="pdc__desc">{post.desc}</p>
+            <h2 className="pdc__title">{displayPost.title}</h2>
+            <p className="pdc__desc">{displayPost.desc}</p>
 
             {images.length > 0 && (
               <div
@@ -322,7 +451,8 @@ export default function PostDetailModal({ post, visible, onClose }) {
                 {showQuantityTag && (
                   <span className="pdc__quantity-tag">
                     {/* giống PostCard */}
-                    {post?.loai_bai === "CHO" || post?.type === "cho" ? (
+                    {displayPost?.loai_bai === "CHO" ||
+                    displayPost?.type === "cho" ? (
                       <>
                         <FiPackage size={11} style={{ marginRight: 3 }} />
                         Tặng: <span>{soLuong}</span>
@@ -366,51 +496,14 @@ export default function PostDetailModal({ post, visible, onClose }) {
                 <FiMessageCircle size={19} />
                 <span>Nhắn tin</span>
               </button>
-              <button className="pdc__action-btn pdc__action-btn--share">
+              <button
+                className="pdc__action-btn pdc__action-btn--share"
+                onClick={handleShare}
+              >
                 <FiSend size={19} />
                 <span>Chia sẻ</span>
               </button>
             </div>
-
-            {hasAiSuggestions && (
-              <>
-                <div className="pdc__divider" />
-                <div className="pdc__ai-box">
-                  <div className="pdc__ai-box-header">
-                    <div className="pdc__ai-box-title">
-                      <div className="pdc__ai-robot-icon">
-                        <RiRobot2Line size={15} />
-                        <span className="pdc__ai-ping" />
-                      </div>
-                      <span>Gợi ý phù hợp cho bạn</span>
-                      <RiSparklingLine size={12} className="pdc__ai-sparkle" />
-                    </div>
-                    <span className="pdc__ai-count">
-                      {post.aiSuggestions.length} kết quả
-                    </span>
-                  </div>
-                  <div className="pdc__ai-list">
-                    {post.aiSuggestions.map((sug) => (
-                      <div key={sug.id} className="pdc__ai-item">
-                        <div className="pdc__ai-item-icon">{sug.icon}</div>
-                        <div className="pdc__ai-item-info">
-                          <div className="pdc__ai-item-title">{sug.title}</div>
-                          <div className="pdc__ai-item-loc">
-                            <FiMapPin size={10} /> {sug.location}
-                            <span className="pdc__ai-item-score">
-                              {sug.matchScore}% khớp
-                            </span>
-                          </div>
-                        </div>
-                        <button className="pdc__ai-view-btn">
-                          Xem ngay <FiChevronRight size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
           </div>
         </div>
 
@@ -476,7 +569,11 @@ export default function PostDetailModal({ post, visible, onClose }) {
             )}
             <div className="pdc__comment-input-row">
               <div className="pdc__me-avatar">
-                {user?.ho_ten?.[0]?.toUpperCase() ?? "?"}
+                {user?.anh_dai_dien ? (
+                  <img src={user.anh_dai_dien} alt="avatar" />
+                ) : (
+                  (user?.ho_ten?.[0]?.toUpperCase() ?? "?")
+                )}
               </div>
               <input
                 id="pdc-comment-input"

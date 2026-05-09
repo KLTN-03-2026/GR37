@@ -7,16 +7,33 @@ import RequiredLoginModal from "../../components/Required/index";
 import useAuthStore from "../../store/authStore";
 import { logoutAPI } from "../../api/authService";
 import useChatStore from "../../store/chatStore";
+import NotificationDropdown from "../../components/NotificationDropdown";
 import "./styles.scss";
 
-export default function Header({ notificationsCount = 2 }) {
+export default function Header() {
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchValue, setSearchValue] = useState("");
   const totalUnread = useChatStore((s) => s.totalUnread);
   const [openLoginModal, setOpenLoginModal] = useState(false);
   const { user, token } = useAuthStore();
   const isLoggedIn = !!token;
   const logoutStore = useAuthStore((state) => state.logout);
+  const roles = useAuthStore((s) => s.roles);
+  const isOrg = Array.isArray(roles)
+    ? roles.some(
+        (r) =>
+          r === "TO_CHUC" ||
+          r?.ten === "TO_CHUC" ||
+          r?.ten_vai_tro === "TO_CHUC",
+      )
+    : false;
+  const isAdmin = Array.isArray(roles)
+    ? roles.some(
+        (r) =>
+          r === "ADMIN" || r?.ten === "ADMIN" || r?.ten_vai_tro === "ADMIN",
+      )
+    : false;
 
   const navbar = [
     {
@@ -64,7 +81,6 @@ export default function Header({ notificationsCount = 2 }) {
 
   const getActiveKey = () => {
     const path = location.pathname;
-
     for (const item of navbar) {
       if (item.children) {
         const foundChild = item.children.find(
@@ -72,13 +88,18 @@ export default function Header({ notificationsCount = 2 }) {
         );
         if (foundChild) return [foundChild.key];
       }
-
       if (path === item.key || path.startsWith(item.key + "/")) {
         return [item.key];
       }
     }
-
     return [];
+  };
+
+  const handleSearch = (value) => {
+    if (!value.trim()) return;
+    navigate(
+      `/chien-dich/tim-kiem?keyword=${encodeURIComponent(value.trim())}`,
+    );
   };
 
   const handleLogout = async () => {
@@ -99,17 +120,40 @@ export default function Header({ notificationsCount = 2 }) {
     }
   };
 
-  const items = [
-    {
-      key: "profile",
-      label: "Thông tin cá nhân",
-    },
-    {
-      key: "logout",
-      label: "Đăng xuất",
-      onClick: handleLogout,
-    },
-  ];
+  const items = isAdmin
+    ? [
+        {
+          key: "dashboard",
+          label: "Trang quản trị",
+          onClick: () => navigate("/admin"),
+        },
+        {
+          key: "logout",
+          label: "Đăng xuất",
+          onClick: handleLogout,
+        },
+      ]
+    : [
+        {
+          key: "profile",
+          label: "Thông tin cá nhân",
+          onClick: () => navigate("/profile"),
+        },
+        ...(isOrg
+          ? [
+              {
+                key: "thong-ke",
+                label: "Thống kê chiến dịch",
+                onClick: () => navigate("/thong-ke"),
+              },
+            ]
+          : []),
+        {
+          key: "logout",
+          label: "Đăng xuất",
+          onClick: handleLogout,
+        },
+      ];
 
   return (
     <header className="app-header full-bleed">
@@ -122,7 +166,16 @@ export default function Header({ notificationsCount = 2 }) {
           <Input
             placeholder="Tìm kiếm chiến dịch..."
             allowClear
-            suffix={<FiSearch size={18} />}
+            value={searchValue}
+            onChange={(e) => setSearchValue(e.target.value)}
+            onPressEnter={() => handleSearch(searchValue)}
+            suffix={
+              <FiSearch
+                size={18}
+                style={{ cursor: "pointer" }}
+                onClick={() => handleSearch(searchValue)}
+              />
+            }
             className="app-header__searchInput"
           />
         </div>
@@ -139,15 +192,7 @@ export default function Header({ notificationsCount = 2 }) {
         <div className="app-header__actions">
           {isLoggedIn ? (
             <>
-              <button
-                type="button"
-                className="app-header__iconBtn"
-                aria-label="Thông báo"
-              >
-                <Badge count={notificationsCount} size="small" offset={[0, 4]}>
-                  <FiBell size={22} />
-                </Badge>
-              </button>
+              <NotificationDropdown />
               <button
                 type="button"
                 className="app-header__iconBtn"
@@ -160,8 +205,9 @@ export default function Header({ notificationsCount = 2 }) {
               </button>
               <Dropdown menu={{ items }}>
                 <div className="app-header__user">
-                  <Avatar size={34}>
-                    {user?.ho_ten?.[0]?.toUpperCase() || "U"}
+                  <Avatar size={34} src={user?.anh_dai_dien || undefined}>
+                    {!user?.anh_dai_dien &&
+                      (user?.ho_ten?.[0]?.toUpperCase() || "U")}
                   </Avatar>
                   <div className="app-header__userText">
                     <div className="app-header__userName">{user?.ho_ten}</div>
@@ -173,9 +219,9 @@ export default function Header({ notificationsCount = 2 }) {
             <div className="app-header__auth">
               <button
                 className="app-header__btn app-header__btn--orange"
-                onClick={() => setOpenLoginModal(true)}
+                onClick={() => navigate("/dang-ky")}
               >
-                Tạo chiến dịch
+                Đăng ký
               </button>
               <button
                 className="app-header__btn app-header__btn--green"
@@ -187,7 +233,7 @@ export default function Header({ notificationsCount = 2 }) {
           )}
         </div>
       </div>
-      {/* Modal đăng nhập */}
+
       <RequiredLoginModal
         openLoginModal={openLoginModal}
         setOpenLoginModal={setOpenLoginModal}
